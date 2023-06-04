@@ -1,9 +1,9 @@
+use crate::error::{Error, ErrorKind};
 use std::{thread, time};
 
 use reqwest;
 use serde::{de::DeserializeOwned, Deserialize};
 use serde_json::Value;
-use std::fmt;
 use std::vec;
 
 const RESAS_ENDPOINT: &str = "https://opendata.resas-portal.go.jp";
@@ -13,61 +13,6 @@ pub struct ResasResponse<T> {
     message: Option<String>,
     #[serde(bound(deserialize = "Vec<T>: Deserialize<'de>"))]
     pub result: Vec<T>,
-}
-
-#[derive(Debug)]
-pub enum ErrorKind {
-    Fatal,
-    Retryable,
-}
-
-#[derive(Debug)]
-pub struct Error {
-    kind: ErrorKind,
-    source: Option<Box<dyn std::error::Error>>,
-    message: Option<String>,
-}
-
-impl std::error::Error for Error {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        self.source.as_ref().map(|e| e.as_ref())
-    }
-}
-
-impl std::convert::From<reqwest::Error> for Error {
-    fn from(err: reqwest::Error) -> Error {
-        Error {
-            kind: ErrorKind::Fatal,
-            source: Some(Box::from(err)),
-            message: None,
-        }
-    }
-}
-
-impl std::convert::From<serde_json::Error> for Error {
-    fn from(err: serde_json::Error) -> Error {
-        Error {
-            kind: ErrorKind::Fatal,
-            source: Some(Box::from(err)),
-            message: None,
-        }
-    }
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
-        match self.kind {
-            ErrorKind::Fatal => write!(f, "Fatal error: ")?,
-            ErrorKind::Retryable => write!(f, "Retryable error: ")?,
-        }
-        if let Some(message) = self.message.as_ref() {
-            write!(f, "{}", message)?;
-        }
-        if let Some(source) = self.source.as_ref() {
-            return source.fmt(f);
-        }
-        Ok(())
-    }
 }
 
 #[derive(Debug)]
@@ -104,20 +49,20 @@ impl Client {
     fn send_request_with_retry(&self, url: &str) -> Result<String, Error> {
         let mut attempts = 0;
         loop {
-            let err = match self.send_request(url) {
+            let mut err = match self.send_request(url) {
                 Ok(r) => return Ok(r),
-                Err(err) => match err.kind {
-                    ErrorKind::Fatal => return Err(err),
-                    ErrorKind::Retryable => err,
-                },
+                Err(err) => {
+                    if !err.is_retriable() {
+                        return Err(err);
+                    }
+                    err
+                }
             };
             attempts += 1;
             if attempts == self.retry_policy.attempts {
-                return Err(Error {
-                    kind: ErrorKind::Fatal,
-                    source: err.source,
-                    message: Some(format!("Retried {} but couldn't recover", attempts)),
-                });
+                return Err(
+                    err.to_fatal(Some(format!("Retried {} but couldn't recover", attempts)))
+                );
             }
             thread::sleep(time::Duration::from_secs(self.retry_policy.interval));
         }
@@ -141,24 +86,24 @@ impl Client {
                         .retriable_codes
                         .contains(&status_code.to_string())
                     {
-                        return Err(Error {
-                            kind: ErrorKind::Retryable,
-                            source: None,
-                            message: Some(response_json["message"].to_string()),
-                        });
+                        return Err(Error::new(
+                            ErrorKind::Retryable,
+                            None,
+                            Some(response_json["message"].to_string()),
+                        ));
                     }
                     if status_code.to_string().starts_with("2") {
                         return Ok(resopnse_text);
                     }
-                    return Err(Error {
-                        kind: ErrorKind::Fatal,
-                        source: None,
-                        message: Some(format!(
+                    return Err(Error::new(
+                        ErrorKind::Fatal,
+                        None,
+                        Some(format!(
                             "{status_code} {message}",
                             status_code = status_code,
                             message = response_json["message"],
                         )),
-                    });
+                    ));
                 }
                 Ok(resopnse_text)
             }
@@ -169,11 +114,11 @@ impl Client {
                         .retriable_codes
                         .contains(&status_code.to_string())
                     {
-                        return Err(Error {
-                            kind: ErrorKind::Retryable,
-                            source: Some(Box::from(err)),
-                            message: Some(format!("Status code {}", status_code)),
-                        });
+                        return Err(Error::new(
+                            ErrorKind::Retryable,
+                            Some(Box::from(err)),
+                            Some(format!("Status code {}", status_code)),
+                        ));
                     }
                 }
                 Err(Error::from(err))

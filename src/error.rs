@@ -13,6 +13,33 @@ pub struct Error {
     message: Option<String>,
 }
 
+impl Error {
+    pub fn new(
+        kind: ErrorKind,
+        source: Option<Box<dyn std::error::Error>>,
+        message: Option<String>,
+    ) -> Error {
+        Error {
+            kind: kind,
+            source: source,
+            message: message,
+        }
+    }
+    pub fn is_retriable(&self) -> bool {
+        match self.kind {
+            ErrorKind::Retryable => true,
+            ErrorKind::Fatal => false,
+        }
+    }
+    pub fn to_fatal(&mut self, message: Option<String>) -> Self {
+        Self {
+            kind: ErrorKind::Fatal,
+            source: self.source.take(),
+            message: message,
+        }
+    }
+}
+
 impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         self.source.as_ref().map(|e| e.as_ref())
