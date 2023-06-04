@@ -5,7 +5,7 @@ use clap::Parser;
 use itertools::Itertools;
 use parquet::arrow::arrow_writer::ArrowWriter;
 use parquet::file::properties::WriterProperties;
-use resas_downloader::{client, schema};
+use resas_client::{client, schema};
 use std::fs::File;
 use std::sync::Arc;
 use std::{str, thread, time::Duration};
@@ -22,7 +22,7 @@ struct Args {
 pub fn main() {
     let args = Args::parse();
     let (token, output_path) = (&args.token, &args.output_path);
-    let client = client::Client::new(String::from(token.as_str()), client::RetryPolicy::default());
+    let client = client::Client::new(token.to_string(), client::RetryPolicy::default());
     let prefectures = match client.get::<schema::Prefecture>(RESAS_PATH_PREFECTURE, None, true) {
         Ok(p) => p.result,
         Err(e) => panic!("Failed to get request: {}", e),
